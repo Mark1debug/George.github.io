@@ -1,7 +1,3 @@
-用Claude制作的一个检测专注程度小工具，我总是不好判断自己的专注状态，所以试着做了一个小工具来帮我记录我的专注程度以便我决定什么时候该休息了
-完全没有自己敲一个代码，所以 可能有很多不合理的地方
-自己用了一天，感觉还不错，等考试完可能会更新一下它
-
 """
 Mouse activity tracker for the study-state-tracker artifact.
 
@@ -36,19 +32,43 @@ IDLE_THRESHOLD_SEC = 1.0
 HTTP_PORT = 9876
 
 
+# Only these Origin headers can talk to the local HTTP server.
+# - "null"  -> file:// pages (the standalone HTML you open locally)
+# - ""      -> no Origin header (curl, direct address-bar navigation)
+# Any real website (https://anysite.com etc) will get 403.
+ALLOWED_ORIGINS = {"", "null"}
+
+
 class _LogHandler(BaseHTTPRequestHandler):
+    def _check_origin(self):
+        origin = self.headers.get("Origin", "")
+        if origin not in ALLOWED_ORIGINS:
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "null")
+            self.end_headers()
+            self.wfile.write(b"Forbidden: only file:// pages may access this local server.")
+            return None
+        return origin
+
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # Reply with "null" so file:// pages (Origin: null) are accepted,
+        # while any https://... origin is implicitly rejected.
+        self.send_header("Access-Control-Allow-Origin", "null")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "*")
         self.send_header("Cache-Control", "no-cache")
 
     def do_OPTIONS(self):
+        if self._check_origin() is None:
+            return
         self.send_response(204)
         self._cors()
         self.end_headers()
 
     def do_GET(self):
+        if self._check_origin() is None:
+            return
         if self.path == "/mouse_log.jsonl":
             try:
                 with open(LOG_PATH, "rb") as f:
@@ -71,6 +91,8 @@ class _LogHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        if self._check_origin() is None:
+            return
         if self.path != "/analyze":
             self.send_response(404)
             self._cors()
@@ -271,46 +293,4 @@ def main():
     print()
 
     tracker = Tracker()
-    listener = mouse.Listener(
-        on_move=tracker.on_move,
-        on_click=tracker.on_click,
-        on_scroll=tracker.on_scroll,
-    )
-    listener.start()
-
-    def shutdown(reason):
-        print(f"\n{reason}, flushing final window...")
-        try:
-            tracker.flush()
-        except Exception as e:
-            print(f"flush failed: {e}")
-        try:
-            listener.stop()
-        except Exception:
-            pass
-        try:
-            if os.path.exists(STOP_FILE):
-                os.remove(STOP_FILE)
-        except OSError:
-            pass
-        print("Done.")
-
-    try:
-        while True:
-            for _ in range(WINDOW_SECONDS):
-                time.sleep(1)
-                if os.path.exists(STOP_FILE):
-                    shutdown("Stop signal received")
-                    return
-            tracker.flush()
-    except KeyboardInterrupt:
-        shutdown("Interrupted")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except ImportError as e:
-        print(f"ERROR: missing dependency: {e}")
-        print("Run:  pip install pynput")
-        sys.exit(1)
+    listener = mouse.Listener
