@@ -1,0 +1,160 @@
+"""Installer for the Study State Tracker.
+
+Run via install.bat. Does the work in Python (no batch quirks):
+  1. Verifies pynput is available, installs via pip if not.
+  2. Writes a VBS launcher into the Windows Startup folder so
+     mouse_tracker.py runs silently at every login.
+  3. Starts mouse_tracker.py right now in the background.
+"""
+
+import os
+import shutil
+import subprocess
+import sys
+import traceback
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+LOG_PATH = os.path.join(HERE, "install_log.txt")
+
+
+def log(msg):
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(msg + "\n")
+    print(msg)
+
+
+def main():
+    # Fresh log
+    open(LOG_PATH, "w", encoding="utf-8").close()
+    log("=" * 60)
+    log("  Study State Tracker - Installer")
+    log("=" * 60)
+    log(f"  Install dir : {HERE}")
+    log(f"  Python      : {sys.executable}")
+    log(f"  Version     : {sys.version.split()[0]}")
+    log("=" * 60)
+    log("")
+
+    response = input("Press Y to continue, anything else to abort: ").strip().lower()
+    if response != "y":
+        log("Aborted by user.")
+        return 0
+
+    # === Step 1: pynput ===
+    log("")
+    log("=== Step 1/3: Checking pynput ===")
+    try:
+        import pynput  # noqa: F401
+        log("pynput already installed.")
+    except ImportError:
+        log("pynput not installed. Installing via pip...")
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--user", "pynput"],
+            check=False,
+        )
+        if r.returncode != 0:
+            log("")
+            log("ERROR: pip install pynput failed.")
+            log(f"Try manually:  {sys.executable} -m pip install pynput")
+            return 1
+        try:
+            import pynput  # noqa: F401
+            log("pynput installed successfully.")
+        except ImportError:
+            log("ERROR: pynput installed but still cannot import.")
+            return 1
+
+    # === Step 2: autostart ===
+    log("")
+    log("=== Step 2/3: Configuring autostart ===")
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        log("ERROR: %APPDATA% environment variable not set.")
+        return 1
+    startup = os.path.join(
+        appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"
+    )
+    os.makedirs(startup, exist_ok=True)
+    vbs_path = os.path.join(startup, "StudyStateTracker.vbs")
+    vbs_content = (
+        "' Auto-start launcher for Study State Tracker\r\n"
+        "' Runs mouse_tracker.py silently every login.\r\n"
+        'Set WshShell = CreateObject("WScript.Shell")\r\n'
+        f'WshShell.CurrentDirectory = "{HERE}"\r\n'
+        'WshShell.Run "pythonw mouse_tracker.py", 0, False\r\n'
+    )
+    try:
+        with open(vbs_path, "w", encoding="utf-8") as f:
+            f.write(vbs_content)
+        log(f"Autostart launcher written to:")
+        log(f"  {vbs_path}")
+    except Exception as e:
+        log(f"ERROR: could not write VBS: {e}")
+        return 1
+
+    # === Step 3: start now ===
+    log("")
+    log("=== Step 3/3: Starting tracker now ===")
+    pythonw = sys.executable.replace("python.exe", "pythonw.exe")
+    if not os.path.exists(pythonw):
+        # Fall back to PATH lookup
+        pythonw = shutil.which("pythonw") or sys.executable
+    tracker = os.path.join(HERE, "mouse_tracker.py")
+    if not os.path.exists(tracker):
+        log(f"ERROR: tracker script not found: {tracker}")
+        return 1
+
+    # Clear any stale stop signal
+    stop_file = os.path.join(HERE, "STOP_TRACKER")
+    if os.path.exists(stop_file):
+        try:
+            os.remove(stop_file)
+        except OSError:
+            pass
+
+    try:
+        # DETACHED_PROCESS = 0x00000008 — survive parent shell exit
+        DETACHED = 0x00000008
+        CREATE_NO_WINDOW = 0x08000000
+        flags = DETACHED | CREATE_NO_WINDOW if os.name == "nt" else 0
+        proc = subprocess.Popen(
+            [pythonw, tracker],
+            cwd=HERE,
+            creationflags=flags,
+            close_fds=True,
+        )
+        log(f"Tracker launched: pid={proc.pid}")
+        log(f"  using: {pythonw}")
+        log("(no visible window; check Task Manager for pythonw.exe)")
+    except Exception as e:
+        log(f"WARNING: could not start tracker right now: {e}")
+        log("It will still autostart on next login.")
+
+    # === Done ===
+    log("")
+    log("=" * 60)
+    log("  Done!")
+    log("=" * 60)
+    log("")
+    log("Daily flow: just open Cowork — tracker runs in background.")
+    log("To stop:                  stop_tracker.bat")
+    log("To remove autostart:      uninstall.bat")
+    log("To open standalone UI:    create_shortcut.bat (one-time)")
+    log("")
+    log(f"Log saved to: {LOG_PATH}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        rc = main() or 0
+    except Exception:
+        rc = 1
+        traceback.print_exc()
+        try:
+            with open(LOG_PATH, "a", encoding="utf-8") as f:
+                f.write("\n--- UNHANDLED EXCEPTION ---\n")
+                f.write(traceback.format_exc())
+        except Exception:
+            pass
+    sys.exit(rc)

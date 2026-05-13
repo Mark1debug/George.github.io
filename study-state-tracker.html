@@ -1,0 +1,13 @@
+@echo off
+title Stop tracker
+cd /d "%~dp0"
+chcp 65001 >nul 2>&1
+echo Sending stop signal to background tracker...
+type nul > STOP_TRACKER
+echo.
+echo Stop signal sent. The tracker will exit within ~30 seconds.
+echo (Autostart still enabled — it will start again on next login.)
+echo.
+echo To also disable autostart: run uninstall.bat
+echo.
+timeout /t 5 >nul
